@@ -24,6 +24,25 @@ export interface Doctor {
   licenseNumber?: string;
 }
 
+export interface Provider {
+  id: string;
+  name: string;
+  type: 'Doctor' | 'Hospital';
+  risk: 'LOW' | 'MEDIUM' | 'HIGH';
+  underSurveillance: boolean;
+  license: string;
+  address: string;
+}
+
+export interface EmpanelmentRequest {
+  id: string;
+  name: string;
+  type: 'Doctor' | 'Hospital';
+  date: string;
+  status: 'Pending' | 'Approved' | 'Rejected' | 'Reviewing';
+  specialization: string;
+}
+
 export interface Patient {
   id: string;
   name: string;
@@ -81,6 +100,17 @@ export interface AIAlert {
   message: string;
   date: string;
   providerName: string;
+}
+
+export interface AppNotification {
+  id: string;
+  category: 'notification' | 'flag'; // 'flag' is for alerts/warnings
+  type: 'info' | 'success' | 'warning' | 'error';
+  title: string;
+  message: string;
+  timestamp: string;
+  read: boolean;
+  link?: string;
 }
 
 export interface ChatMessage {

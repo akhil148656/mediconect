@@ -8,8 +8,11 @@ import {
   Server, Globe, FileDiff, History, X, ChevronRight, ChevronDown, Clock,
   FileCheck, FileX, Paperclip, Building, User, Send
 } from 'lucide-react';
-import { getRiskProfile, sendMessage, runAgenticPipeline, runPeriodicComplianceCheck, fetchVerificationHistory } from '../services/apiService';
-import { AIVerificationResult, AIAlert, PipelineStep } from '../types';
+import { 
+  getRiskProfile, sendMessage, runAgenticPipeline, runPeriodicComplianceCheck, fetchVerificationHistory,
+  fetchProviders, updateProvider, fetchEmpanelmentRequests, updateEmpanelmentRequest
+} from '../services/apiService';
+import { AIVerificationResult, AIAlert, PipelineStep, Provider, EmpanelmentRequest } from '../types';
 
 // Mock Data for charts
 const PREMIUM_DATA = [
@@ -32,18 +35,10 @@ interface InsuranceDashboardProps {
 }
 
 export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentView }) => {
-  const [providers, setProviders] = useState([
-    { id: '1', name: 'Dr. Sarah Jenning', type: 'Doctor', risk: 'LOW', underSurveillance: false, license: 'MD-CA-49210', address: '123 Mission St, CA' },
-    { id: '2', name: 'City General Hospital', type: 'Hospital', risk: 'LOW', underSurveillance: true, license: 'HOSP-CA-1111', address: '100 Main St, CA' },
-    { id: '3', name: 'Dr. James Wilson', type: 'Doctor', risk: 'HIGH', underSurveillance: true, license: 'FLG-TX-00000', address: '777 Hope Ln, TX' },
-    { id: '4', name: 'Memorial Sloan', type: 'Hospital', risk: 'MEDIUM', underSurveillance: false, license: 'HOSP-NY-2222', address: '5th Ave, NY' },
-  ]);
-
-  const [empanelmentRequests, setEmpanelmentRequests] = useState([
-    { id: 'REQ-001', name: 'Dr. Emily Stone', type: 'Doctor', date: '2024-03-15', status: 'Pending', specialization: 'Dermatology' },
-    { id: 'REQ-002', name: 'Westside Community Clinic', type: 'Hospital', date: '2024-03-14', status: 'Pending', specialization: 'General Care' },
-    { id: 'REQ-003', name: 'Dr. Alan Grant', type: 'Doctor', date: '2024-03-12', status: 'Reviewing', specialization: 'Paleontology' },
-  ]);
+  // Connected State (Fetched from Backend)
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [empanelmentRequests, setEmpanelmentRequests] = useState<EmpanelmentRequest[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [aiAlerts, setAiAlerts] = useState<AIAlert[]>([]);
   
@@ -52,7 +47,7 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
   const [isVerifying, setIsVerifying] = useState(false);
   const [selectedProviderForVerify, setSelectedProviderForVerify] = useState<string>('');
   const [visibleSteps, setVisibleSteps] = useState<PipelineStep[]>([]);
-  const [showPipelinePanel, setShowPipelinePanel] = useState(false); // Toggle the visualizer in providers view
+  const [showPipelinePanel, setShowPipelinePanel] = useState(false); 
 
   // History Modal State
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -63,14 +58,39 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
 
   const [messageInput, setMessageInput] = useState('');
 
+  // Initial Data Fetch
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      try {
+        const [provs, reqs] = await Promise.all([
+          fetchProviders(),
+          fetchEmpanelmentRequests()
+        ]);
+        setProviders(provs);
+        setEmpanelmentRequests(reqs);
+      } catch (e) {
+        console.error("Failed to load dashboard data", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, []);
+
   // --- ACTIONS ---
 
   const toggleSurveillance = async (id: string) => {
-    // Mock API Call
-    await new Promise(resolve => setTimeout(resolve, 500));
+    const provider = providers.find(p => p.id === id);
+    if (!provider) return;
+
+    // Optimistic Update
     setProviders(prev => prev.map(p => 
       p.id === id ? { ...p, underSurveillance: !p.underSurveillance } : p
     ));
+
+    // Call Backend
+    await updateProvider(id, { underSurveillance: !provider.underSurveillance });
   };
 
   const handleSendMessage = async () => {
@@ -90,12 +110,11 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
     if(!provider) return;
 
     setSelectedProviderForVerify(providerId);
-    setShowPipelinePanel(true); // Show the panel
+    setShowPipelinePanel(true);
     setIsVerifying(true);
     setVerificationResult(null);
     setVisibleSteps([]);
 
-    // Call Agentic Pipeline
     const result = await runAgenticPipeline({
       name: provider.name,
       license: provider.license,
@@ -106,7 +125,6 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
     setVerificationResult(result);
     setIsVerifying(false);
 
-    // Animate Steps
     if (result.pipelineTrace) {
       result.pipelineTrace.forEach((step, index) => {
         setTimeout(() => {
@@ -132,10 +150,14 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
     }
   };
 
-  const handleEmpanelmentAction = (id: string, action: 'Approved' | 'Rejected') => {
+  const handleEmpanelmentAction = async (id: string, action: 'Approved' | 'Rejected') => {
+      // Optimistic Update
       setEmpanelmentRequests(prev => prev.map(req => 
         req.id === id ? { ...req, status: action } : req
       ));
+
+      // Call Backend
+      await updateEmpanelmentRequest(id, { status: action });
   };
 
   // --- SUB-COMPONENT RENDERS ---
@@ -144,7 +166,10 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
     <div className="space-y-6 animate-fadeIn">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-800">Program Overview</h2>
-        <div className="text-sm text-slate-500">Last updated: Just now</div>
+        <div className="text-sm text-slate-500 flex items-center gap-2">
+           <div className={`h-2 w-2 rounded-full ${loading ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
+           {loading ? 'Syncing...' : 'Connected to Cloud DB'}
+        </div>
       </div>
 
       {/* Agent 2 Alert Section */}
@@ -200,7 +225,7 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
         </div>
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
           <p className="text-sm text-slate-500 font-medium">High Risk Providers</p>
-          <p className="text-2xl font-bold text-red-600 mt-2">12</p>
+          <p className="text-2xl font-bold text-red-600 mt-2">{providers.filter(p => p.risk === 'HIGH').length}</p>
           <span className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded mt-2 inline-block">Attention Needed</span>
         </div>
       </div>
@@ -269,68 +294,72 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-             <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold">
-                   <tr>
-                      <th className="px-6 py-4">Provider</th>
-                      <th className="px-6 py-4">License</th>
-                      <th className="px-6 py-4">Risk Profile</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
-                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                   {providers.map(provider => (
-                      <tr key={provider.id} className={`hover:bg-slate-50 transition-colors ${selectedProviderForVerify === provider.id ? 'bg-indigo-50/50' : ''}`}>
-                         <td className="px-6 py-4">
-                            <div className="flex items-center gap-3">
-                               <div className={`p-2 rounded-lg ${provider.type === 'Doctor' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>
-                                  {provider.type === 'Doctor' ? <User size={18} /> : <Building size={18} />}
-                               </div>
-                               <div>
-                                  <p className="font-medium text-slate-900">{provider.name}</p>
-                                  <p className="text-xs text-slate-500">{provider.address}</p>
-                               </div>
-                            </div>
-                         </td>
-                         <td className="px-6 py-4 text-slate-500 text-sm font-mono">{provider.license}</td>
-                         <td className="px-6 py-4">
-                            <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                               provider.risk === 'HIGH' ? 'bg-red-100 text-red-700' :
-                               provider.risk === 'MEDIUM' ? 'bg-amber-100 text-amber-700' :
-                               'bg-green-100 text-green-700'
-                            }`}>
-                               {provider.risk}
-                            </span>
-                         </td>
-                         <td className="px-6 py-4 text-right space-x-2">
-                            <button 
-                               onClick={() => handleViewHistory(provider)}
-                               className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors"
-                               title="History"
-                            >
-                               <History size={16} />
-                            </button>
-                            <button 
-                               onClick={() => handleVerifyProvider(provider.id)}
-                               className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors"
-                               title="Verify with AI"
-                            >
-                               <Network size={16} />
-                            </button>
-                            <button 
-                               onClick={() => toggleSurveillance(provider.id)}
-                               className={`p-2 rounded-lg transition-colors ${
-                                  provider.underSurveillance ? 'bg-red-50 text-red-600' : 'bg-slate-100 text-slate-400 hover:text-slate-600'
-                               }`}
-                               title="Toggle Surveillance"
-                            >
-                               {provider.underSurveillance ? <Eye size={16} /> : <EyeOff size={16} />}
-                            </button>
-                         </td>
+             {loading ? (
+                <div className="p-12 text-center text-slate-400">Loading provider network...</div>
+             ) : (
+                <table className="w-full text-left border-collapse">
+                   <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold">
+                      <tr>
+                         <th className="px-6 py-4">Provider</th>
+                         <th className="px-6 py-4">License</th>
+                         <th className="px-6 py-4">Risk Profile</th>
+                         <th className="px-6 py-4 text-right">Actions</th>
                       </tr>
-                   ))}
-                </tbody>
-             </table>
+                   </thead>
+                   <tbody className="divide-y divide-slate-100">
+                      {providers.map(provider => (
+                         <tr key={provider.id} className={`hover:bg-slate-50 transition-colors ${selectedProviderForVerify === provider.id ? 'bg-indigo-50/50' : ''}`}>
+                            <td className="px-6 py-4">
+                               <div className="flex items-center gap-3">
+                                  <div className={`p-2 rounded-lg ${provider.type === 'Doctor' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>
+                                     {provider.type === 'Doctor' ? <User size={18} /> : <Building size={18} />}
+                                  </div>
+                                  <div>
+                                     <p className="font-medium text-slate-900">{provider.name}</p>
+                                     <p className="text-xs text-slate-500">{provider.address}</p>
+                                  </div>
+                               </div>
+                            </td>
+                            <td className="px-6 py-4 text-slate-500 text-sm font-mono">{provider.license}</td>
+                            <td className="px-6 py-4">
+                               <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                  provider.risk === 'HIGH' ? 'bg-red-100 text-red-700' :
+                                  provider.risk === 'MEDIUM' ? 'bg-amber-100 text-amber-700' :
+                                  'bg-green-100 text-green-700'
+                               }`}>
+                                  {provider.risk}
+                               </span>
+                            </td>
+                            <td className="px-6 py-4 text-right space-x-2">
+                               <button 
+                                  onClick={() => handleViewHistory(provider)}
+                                  className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors"
+                                  title="History"
+                               >
+                                  <History size={16} />
+                               </button>
+                               <button 
+                                  onClick={() => handleVerifyProvider(provider.id)}
+                                  className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors"
+                                  title="Verify with AI"
+                               >
+                                  <Network size={16} />
+                               </button>
+                               <button 
+                                  onClick={() => toggleSurveillance(provider.id)}
+                                  className={`p-2 rounded-lg transition-colors ${
+                                     provider.underSurveillance ? 'bg-red-50 text-red-600' : 'bg-slate-100 text-slate-400 hover:text-slate-600'
+                                  }`}
+                                  title="Toggle Surveillance"
+                               >
+                                  {provider.underSurveillance ? <Eye size={16} /> : <EyeOff size={16} />}
+                               </button>
+                            </td>
+                         </tr>
+                      ))}
+                   </tbody>
+                </table>
+             )}
           </div>
        </div>
 
@@ -369,9 +398,11 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
                                      <p className="text-xs text-slate-500 font-medium">{step.role}</p>
                                   </div>
                                   <span className={`text-xs px-2 py-1 rounded-full capitalize flex items-center gap-1 ${
-                                     step.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                                     step.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 
+                                     step.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'
                                   }`}>
                                      {step.status === 'completed' && <CheckCircle2 size={12} />}
+                                     {step.status === 'failed' && <XCircle size={12} />}
                                      {step.status}
                                   </span>
                                </div>
@@ -438,68 +469,72 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
        </div>
 
        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-          <table className="w-full text-left">
-             <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold">
-                <tr>
-                   <th className="px-6 py-4">Request ID</th>
-                   <th className="px-6 py-4">Provider Details</th>
-                   <th className="px-6 py-4">Submission Date</th>
-                   <th className="px-6 py-4">Status</th>
-                   <th className="px-6 py-4 text-right">Actions</th>
-                </tr>
-             </thead>
-             <tbody className="divide-y divide-slate-100">
-                {empanelmentRequests.map(req => (
-                   <tr key={req.id} className="hover:bg-slate-50">
-                      <td className="px-6 py-4 text-sm font-mono text-slate-500">{req.id}</td>
-                      <td className="px-6 py-4">
-                         <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-xs">
-                               {req.name.charAt(0)}
-                            </div>
-                            <div>
-                               <p className="font-medium text-slate-900">{req.name}</p>
-                               <p className="text-xs text-slate-500">{req.type} • {req.specialization}</p>
-                            </div>
-                         </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-slate-600">{req.date}</td>
-                      <td className="px-6 py-4">
-                         <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                            req.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' :
-                            req.status === 'Rejected' ? 'bg-red-100 text-red-700' :
-                            'bg-amber-100 text-amber-700'
-                         }`}>
-                            {req.status}
-                         </span>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                         {req.status === 'Pending' || req.status === 'Reviewing' ? (
-                            <div className="flex justify-end gap-2">
-                               <button 
-                                  onClick={() => handleEmpanelmentAction(req.id, 'Approved')}
-                                  className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded" title="Approve"
-                               >
-                                  <FileCheck size={18} />
-                               </button>
-                               <button 
-                                  onClick={() => handleEmpanelmentAction(req.id, 'Rejected')}
-                                  className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Reject"
-                               >
-                                  <FileX size={18} />
-                               </button>
-                               <button className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded" title="View Docs">
-                                  <Paperclip size={18} />
-                               </button>
-                            </div>
-                         ) : (
-                            <span className="text-xs text-slate-400 italic">No actions available</span>
-                         )}
-                      </td>
+          {loading ? (
+             <div className="p-12 text-center text-slate-400">Loading requests...</div>
+          ) : (
+             <table className="w-full text-left">
+                <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold">
+                   <tr>
+                      <th className="px-6 py-4">Request ID</th>
+                      <th className="px-6 py-4">Provider Details</th>
+                      <th className="px-6 py-4">Submission Date</th>
+                      <th className="px-6 py-4">Status</th>
+                      <th className="px-6 py-4 text-right">Actions</th>
                    </tr>
-                ))}
-             </tbody>
-          </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                   {empanelmentRequests.map(req => (
+                      <tr key={req.id} className="hover:bg-slate-50">
+                         <td className="px-6 py-4 text-sm font-mono text-slate-500">{req.id}</td>
+                         <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                               <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-xs">
+                                  {req.name.charAt(0)}
+                               </div>
+                               <div>
+                                  <p className="font-medium text-slate-900">{req.name}</p>
+                                  <p className="text-xs text-slate-500">{req.type} • {req.specialization}</p>
+                               </div>
+                            </div>
+                         </td>
+                         <td className="px-6 py-4 text-sm text-slate-600">{req.date}</td>
+                         <td className="px-6 py-4">
+                            <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                               req.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' :
+                               req.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                               'bg-amber-100 text-amber-700'
+                            }`}>
+                               {req.status}
+                            </span>
+                         </td>
+                         <td className="px-6 py-4 text-right">
+                            {req.status === 'Pending' || req.status === 'Reviewing' ? (
+                               <div className="flex justify-end gap-2">
+                                  <button 
+                                     onClick={() => handleEmpanelmentAction(req.id, 'Approved')}
+                                     className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded" title="Approve"
+                                  >
+                                     <FileCheck size={18} />
+                                  </button>
+                                  <button 
+                                     onClick={() => handleEmpanelmentAction(req.id, 'Rejected')}
+                                     className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Reject"
+                                  >
+                                     <FileX size={18} />
+                                  </button>
+                                  <button className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded" title="View Docs">
+                                     <Paperclip size={18} />
+                                  </button>
+                               </div>
+                            ) : (
+                               <span className="text-xs text-slate-400 italic">No actions available</span>
+                            )}
+                         </td>
+                      </tr>
+                   ))}
+                </tbody>
+             </table>
+          )}
        </div>
     </div>
   );
