@@ -4,86 +4,130 @@ import { GoogleGenAI } from "@google/genai";
 // Initialize Gemini AI
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+// --- MOCK EXTERNAL DATABASES (SIMULATION) ---
+// These act as the "Ground Truth" for the Agentic AI to query against.
+
+const MOCK_DATABASE = {
+  // National Plan and Provider Enumeration System
+  NPI_REGISTRY: [
+    { npi: '1592837461', name: 'Dr. Sarah Jenning', status: 'ACTIVE', type: 'Doctor', address: '123 Mission St, CA', lastUpdated: '2024-01-10' },
+    { npi: '1928374650', name: 'City General Hospital', status: 'ACTIVE', type: 'Hospital', address: '100 Main St, CA', lastUpdated: '2023-11-05' },
+    { npi: '9988776655', name: 'Dr. James Wilson', status: 'ACTIVE', type: 'Doctor', address: '777 Hope Ln, TX', lastUpdated: '2023-08-15' }, // Valid NPI, but check boards
+    { npi: '5544332211', name: 'Memorial Sloan', status: 'ACTIVE', type: 'Hospital', address: '5th Ave, NY', lastUpdated: '2024-02-01' }
+  ],
+
+  // State Licensing Boards
+  STATE_BOARDS: [
+    { license: 'MD-CA-49210', name: 'Dr. Sarah Jenning', state: 'CA', status: 'ACTIVE', expiry: '2026-05-20', disciplinaryHistory: false },
+    { license: 'HOSP-CA-1111', name: 'City General Hospital', state: 'CA', status: 'ACTIVE', expiry: '2030-01-01', disciplinaryHistory: false },
+    { license: 'HOSP-NY-2222', name: 'Memorial Sloan', state: 'NY', status: 'ACTIVE', expiry: '2028-11-15', disciplinaryHistory: false },
+    // FLAGGED PROVIDER: Suspended License
+    { license: 'FLG-TX-00000', name: 'Dr. James Wilson', state: 'TX', status: 'SUSPENDED', expiry: '2023-12-31', disciplinaryHistory: true } 
+  ],
+
+  // Office of Inspector General (OIG) Exclusions
+  SANCTIONS_LIST: [
+    { name: 'Dr. James Wilson', reason: 'Billing Fraud - Level 2', date: '2024-01-15', source: 'OIG' }
+  ],
+
+  // Geospatial Registry (Simulating Google Maps / Location DB)
+  GEO_REGISTRY: {
+    '1': { lat: 37.76, lng: -122.42, zone: 'San Francisco' }, // Mission St
+    '2': { lat: 40.78, lng: -73.97, zone: 'New York' },       // Manhattan
+    '3': { lat: 37.75, lng: -122.48, zone: 'San Francisco' }, // Sunset
+    '4': { lat: 29.76, lng: -95.36, zone: 'Houston' }         // Houston
+  }
+};
+
 /**
  * ORCHESTRATOR: Agentic Pipeline Runner
- * Coordinates Agent 1 (Acquisition) -> Agent 2 (Validation) -> Data Store -> API
+ * Logic:
+ * 1. Orchestrator receives request.
+ * 2. Agent 1 queries MOCK_DATABASE (simulating Scraper/API).
+ * 3. Agent 2 compares results.
+ * 4. LLM generates the realistic logs based on this context.
  */
 export const runAgenticPipeline = async (provider: { name: string; license: string; type: string; address: string }): Promise<AIVerificationResult> => {
   console.log(`[ORCHESTRATOR] Starting pipeline for: ${provider.name}...`);
   
   try {
+    // 1. DATA ACQUISITION LAYER (Simulated)
+    // We look up the provider in our mock DBs to see what the agents "find".
+    const npiRecord = MOCK_DATABASE.NPI_REGISTRY.find(r => r.name === provider.name);
+    const boardRecord = MOCK_DATABASE.STATE_BOARDS.find(r => r.license === provider.license);
+    const sanctionRecord = MOCK_DATABASE.SANCTIONS_LIST.find(r => r.name === provider.name);
+
+    // 2. CONSTRUCT CONTEXT FOR AI
+    let contextData = "";
+    let expectedStatus = "VERIFIED";
+
+    if (sanctionRecord) {
+      contextData = `CRITICAL ALERT: Agent 1 found provider in OIG Sanctions List. Reason: "${sanctionRecord.reason}". Agent 2 must FAIL verification immediately.`;
+      expectedStatus = "FLAGGED";
+    } else if (!boardRecord) {
+      contextData = `ERROR: Agent 1 could not find License "${provider.license}" in State Board Registry. Agent 2 must mark as UNVERIFIED/PENDING.`;
+      expectedStatus = "PENDING";
+    } else if (boardRecord.status !== 'ACTIVE') {
+      contextData = `WARNING: State Board License status is "${boardRecord.status}" (Expired: ${boardRecord.expiry}). Agent 2 must FLAG this provider.`;
+      expectedStatus = "FLAGGED";
+    } else if (boardRecord.disciplinaryHistory) {
+      contextData = `RISK: Provider has active disciplinary history. Agent 2 should flag for manual review.`;
+      expectedStatus = "FLAGGED";
+    } else {
+      contextData = `SUCCESS: Agent 1 found valid NPI (${npiRecord?.npi}) and Active State License (${boardRecord.license}). Data matches perfectly. Agent 2 should PASS verification.`;
+      expectedStatus = "VERIFIED";
+    }
+
     const model = 'gemini-2.5-flash';
-    // We ask Gemini to generate the execution log of the pipeline steps defined in the architecture
     const prompt = `
-      Simulate a complex "Agentic AI Healthcare Verification Pipeline" execution for provider: "${provider.name}" (License: ${provider.license}).
+      Act as the "HealthGuard Agentic Orchestrator". Generate a JSON execution log for verifying provider: "${provider.name}".
       
-      The pipeline has these specific components:
-      1. Agentic AI (Orchestrator): Coordinates tasks.
-      2. Agent 1 (Data Acquisition): Uses "Web Scraper" and "OCR Engine" to find raw data. It queries the NPI Registry (NPPES), scrapes the specific State Medical Board portal based on the address "${provider.address}", and downloads verification documents.
-      3. Agent 2 (Validation & Sync): Uses "RAG Retriever", "Validator", and "Diff Engine".
-      4. Data Store: Writes versioned records (Audit/Rollback).
-      5. Update API: Syncs to Payer Systems.
-      6. Error Sentinel: Logs exceptions.
-
-      Generate a JSON response representing the step-by-step execution logs.
+      You are running a real-time simulation based on this retrieved ground-truth data:
+      ${contextData}
       
-      If License starts with "FLG", simulate a failure/anomaly in Agent 2 (Validation).
-      Otherwise, simulate a success.
+      The pipeline has these components:
+      1. **Agent 1 (Acquisition)**: Queries NPI Registry & State Boards.
+      2. **Agent 2 (Validation)**: Validates compliance & checks Sanctions.
+      3. **Data Store**: Saves the result.
 
+      Generate a JSON response reflecting the EXACT outcome described in the data above.
+      
       JSON Structure:
       {
         "verified": boolean,
         "confidenceScore": number (0-100),
-        "reason": "Summary string",
+        "reason": "Technical reason based on the data context",
         "pipelineTrace": [
            {
              "id": "1",
              "agentName": "Agentic AI (Orchestrator)",
              "role": "Orchestrator",
              "status": "completed",
-             "logs": ["Init pipeline", "Routing to Agent 1 for data gathering..."],
+             "logs": ["Init pipeline", "Dispatching Agent 1..."],
              "timestamp": "ISO string"
            },
            {
              "id": "2",
              "agentName": "Agent 1",
-             "role": "Data Acquisition (Scraper + OCR)",
+             "role": "Data Acquisition",
              "status": "completed",
              "logs": [
-                "Initializing secure scraper instance...",
-                "Querying National Plan and Provider Enumeration System (NPPES)...",
-                "Connected to State Medical Board Portal...",
-                "Fetching provider profile for license ${provider.license}...",
-                "Downloading Primary Source Verification (PSV) document...",
-                "OCR Engine: Extracting text from license image...",
-                "Data Acquired: Matches found in 2 external registries."
+                "Querying NPI Registry...",
+                "Scraping State Board Portal...",
+                "Downloading PSV Documents...",
+                "OCR processing complete."
              ],
              "timestamp": "ISO string"
            },
            {
              "id": "3",
              "agentName": "Agent 2",
-             "role": "Validation & Sync (RAG + Diff)",
+             "role": "Validation",
              "status": "completed" | "failed",
-             "logs": ["RAG Retrieving context...", "Validating against NPI registry...", "Diff Engine: No changes detected."],
+             "logs": ["Checking OIG Exclusions...", "Validating License Status...", "Cross-referencing address..."],
              "timestamp": "ISO string"
            },
-           {
-             "id": "4",
-             "agentName": "Data Store",
-             "role": "Persistence",
-             "status": "completed",
-             "logs": ["Creating immutable record v1.0.4", "Audit trail updated."],
-             "timestamp": "ISO string"
-           },
-           {
-             "id": "5",
-             "agentName": "Update API",
-             "role": "Payer System Sync",
-             "status": "completed",
-             "logs": ["Pushing update to Legacy Payer DB...", "Sync acknowledged (200 OK)."],
-             "timestamp": "ISO string"
-           }
+           // ... Data Store & API steps
         ]
       }
     `;
@@ -99,11 +143,11 @@ export const runAgenticPipeline = async (provider: { name: string; license: stri
     const result = JSON.parse(response.text || '{}');
     
     return {
-      verified: result.verified ?? true,
+      verified: result.verified,
       status: result.verified ? 'VERIFIED' : 'FLAGGED',
-      confidenceScore: result.confidenceScore || 92,
-      reason: result.reason || "Pipeline execution successful.",
-      sourcesChecked: ["State Board OCR", "NPI Registry (RAG)", "Payer DB"],
+      confidenceScore: result.confidenceScore || (expectedStatus === 'VERIFIED' ? 98 : 45),
+      reason: result.reason || contextData,
+      sourcesChecked: ["NPI Registry", "State Board Database", "OIG Exclusion List"],
       timestamp: new Date().toISOString(),
       pipelineTrace: result.pipelineTrace || []
     };
@@ -129,21 +173,22 @@ export const fetchVerificationHistory = async (providerId: string): Promise<AIVe
   const now = Date.now();
   const day = 86400000;
 
-  // Mock varied history based on ID odd/even to make it look realistic
-  const isProblematic = parseInt(providerId) % 2 !== 0; 
+  // Mock varied history based on ID
+  // ID 1 = Sarah (Good), ID 3 = James (Bad)
+  const isProblematic = providerId === '3' || providerId === 'FLG-TX-00000'; 
 
   const history: AIVerificationResult[] = [
     {
       verified: !isProblematic, // Most recent check
       status: isProblematic ? 'FLAGGED' : 'VERIFIED',
-      confidenceScore: isProblematic ? 45 : 98,
-      reason: isProblematic ? "Anomaly detected: Address mismatch with State Board records." : "Routine automated compliance check passed.",
+      confidenceScore: isProblematic ? 45 : 99,
+      reason: isProblematic ? "Anomaly detected: License status SUSPENDED in State Board Registry." : "Routine automated compliance check passed. All credentials active.",
       sourcesChecked: ["Agent 1 (Scraper)", "Agent 2 (RAG)"],
       timestamp: new Date(now - day * 2).toISOString(), // 2 days ago
       pipelineTrace: [
         { id: '1', agentName: 'Orchestrator', role: 'Init', status: 'completed', logs: ['Scheduled Audit Triggered'], timestamp: new Date(now - day * 2).toISOString() },
         { id: '2', agentName: 'Agent 1', role: 'Data Acquisition', status: 'completed', logs: ['Fetching latest NPI data', 'Scraping State Board'], timestamp: new Date(now - day * 2).toISOString() },
-        { id: '3', agentName: 'Agent 2', role: 'Validation', status: isProblematic ? 'failed' : 'completed', logs: isProblematic ? ['Mismatch found in Address field'] : ['Data consistency verified'], timestamp: new Date(now - day * 2).toISOString() }
+        { id: '3', agentName: 'Agent 2', role: 'Validation', status: isProblematic ? 'failed' : 'completed', logs: isProblematic ? ['CRITICAL: License Suspended found'] : ['Data consistency verified'], timestamp: new Date(now - day * 2).toISOString() }
       ]
     },
     {
@@ -157,15 +202,6 @@ export const fetchVerificationHistory = async (providerId: string): Promise<AIVe
         { id: '1', agentName: 'Orchestrator', role: 'Init', status: 'completed', logs: ['Monthly Cycle'], timestamp: new Date(now - day * 32).toISOString() },
         { id: '2', agentName: 'Agent 2', role: 'Validation', status: 'completed', logs: ['No changes detected since last sync'], timestamp: new Date(now - day * 32).toISOString() }
       ]
-    },
-    {
-      verified: true,
-      status: 'VERIFIED',
-      confidenceScore: 99,
-      reason: "Initial Onboarding Verification.",
-      sourcesChecked: ["OCR", "Manual Review", "NPI Registry"],
-      timestamp: new Date(now - day * 180).toISOString(), // ~6 months ago
-      pipelineTrace: []
     }
   ];
 
@@ -239,9 +275,9 @@ export const runPeriodicComplianceCheck = async (): Promise<AIAlert[]> => {
   try {
     const prompt = `
       Act as Agent 2 (Validation & Sync). 
-      Generate 2 compliance alerts.
-      1. Address Mismatch (Confidence: Low).
-      2. License Expiry (Confidence: High).
+      Generate 2 compliance alerts based on the Mock Database state.
+      1. Alert for "Dr. James Wilson" regarding "License Suspension".
+      2. Alert for "Memorial Sloan" regarding "Address Mismatch".
       Return JSON: [{ "severity": "HIGH"|"MEDIUM"|"LOW", "message": "string", "providerName": "string" }]
     `;
 
@@ -284,8 +320,23 @@ export const sendMessage = async (recipientId: string, message: string): Promise
   return true;
 };
 
-export const fetchDoctors = async (): Promise<Doctor[]> => {
-  return [
+// Calculate Haversine distance
+const getDistanceFromLatLonInKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371; // Radius of the earth in km
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c; // Distance in km
+  return d;
+};
+
+export const fetchDoctors = async (userLocation?: { lat: number, lng: number }): Promise<Doctor[]> => {
+  // Base doctors list
+  const doctors: Doctor[] = [
     {
       id: '1',
       name: 'Dr. Sarah Jenning',
@@ -340,7 +391,26 @@ export const fetchDoctors = async (): Promise<Doctor[]> => {
       imageUrl: 'https://picsum.photos/200/200?random=4',
       treatments: ['Chemotherapy', 'Radiation'],
       contact: '(555) 444-5555',
-      licenseNumber: 'FLG-TX-00000' // Flagged for demo
+      licenseNumber: 'FLG-TX-00000'
     }
   ];
+
+  // If user provides location, sort results by simulated distance
+  if (userLocation) {
+    // Map existing doctors to mock coordinates from GEO_REGISTRY
+    const doctorsWithDistance = doctors.map(doc => {
+      const geo = MOCK_DATABASE.GEO_REGISTRY[doc.id as keyof typeof MOCK_DATABASE.GEO_REGISTRY];
+      if (geo) {
+        const dist = getDistanceFromLatLonInKm(userLocation.lat, userLocation.lng, geo.lat, geo.lng);
+        return { ...doc, distance: dist };
+      }
+      return { ...doc, distance: 99999 }; // Unknown locations go to bottom
+    });
+
+    // Sort: Nearest first
+    doctorsWithDistance.sort((a, b) => a.distance - b.distance);
+    return doctorsWithDistance;
+  }
+
+  return doctors;
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, MapPin, Award, ArrowRight, X, Phone, Star, CheckCircle } from 'lucide-react';
+import { Search, MapPin, Award, ArrowRight, X, Phone, Star, CheckCircle, Navigation } from 'lucide-react';
 import { Doctor } from '../types';
 import { fetchDoctors } from '../services/apiService';
 
@@ -10,6 +10,9 @@ interface PublicViewProps {
 export const PublicView: React.FC<PublicViewProps> = () => {
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationStatus, setLocationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  
   const [filters, setFilters] = useState({
     search: '',
     state: '',
@@ -18,8 +21,32 @@ export const PublicView: React.FC<PublicViewProps> = () => {
   });
 
   useEffect(() => {
-    fetchDoctors().then(setDoctors);
-  }, []);
+    // Fetch doctors (pass location if available to sort by distance)
+    fetchDoctors(userLocation || undefined).then(setDoctors);
+  }, [userLocation]);
+
+  const handleGetLocation = () => {
+    if (!navigator.geolocation) {
+      setLocationStatus('error');
+      alert("Geolocation is not supported by your browser");
+      return;
+    }
+
+    setLocationStatus('loading');
+    
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setUserLocation({ lat: latitude, lng: longitude });
+        setLocationStatus('success');
+      },
+      (error) => {
+        console.error("Error getting location:", error);
+        setLocationStatus('error');
+        // Fallback or alert
+      }
+    );
+  };
 
   const filteredDoctors = doctors.filter(doc => {
     return (
@@ -47,16 +74,44 @@ export const PublicView: React.FC<PublicViewProps> = () => {
             Search top-rated doctors, clinics, and hospitals verified by leading insurance providers.
           </p>
           
-          <div className="relative max-w-2xl mx-auto mt-8">
-            <input
-              type="text"
-              placeholder="Search doctors, hospitals, or specialties..."
-              className="w-full py-4 pl-12 pr-4 rounded-full text-slate-800 shadow-lg focus:outline-none focus:ring-4 focus:ring-primary-500/30 transition-shadow"
-              value={filters.search}
-              onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-            />
-            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-400" />
+          <div className="relative max-w-2xl mx-auto mt-8 flex flex-col md:flex-row gap-2">
+            <div className="relative flex-grow">
+              <input
+                type="text"
+                placeholder="Search doctors, hospitals, or specialties..."
+                className="w-full py-4 pl-12 pr-4 rounded-full md:rounded-r-none md:rounded-l-full text-slate-800 shadow-lg focus:outline-none focus:ring-4 focus:ring-primary-500/30 transition-shadow"
+                value={filters.search}
+                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+              />
+              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-400" />
+            </div>
+            
+            <button 
+              onClick={handleGetLocation}
+              className={`flex items-center justify-center gap-2 px-6 py-4 rounded-full md:rounded-l-none md:rounded-r-full font-medium shadow-lg transition-all ${
+                locationStatus === 'success' 
+                  ? 'bg-emerald-500 hover:bg-emerald-600 text-white' 
+                  : 'bg-slate-800 hover:bg-slate-900 text-white'
+              }`}
+            >
+               {locationStatus === 'loading' ? (
+                 <span>Locating...</span>
+               ) : locationStatus === 'success' ? (
+                 <>
+                   <CheckCircle size={20} /> Near Me
+                 </>
+               ) : (
+                 <>
+                   <Navigation size={20} /> Use My Location
+                 </>
+               )}
+            </button>
           </div>
+          {locationStatus === 'success' && (
+             <p className="text-sm text-emerald-200 animate-fadeIn">
+               Showing doctors sorted by distance to your current location.
+             </p>
+          )}
         </div>
       </div>
 
@@ -131,6 +186,14 @@ export const PublicView: React.FC<PublicViewProps> = () => {
                   <p className="text-primary-600 font-medium text-sm mb-2">{doctor.specialization}</p>
                   <p className="text-slate-500 text-sm mb-4 line-clamp-1">{doctor.hospital}</p>
                   
+                  {/* Distance badge if location is active and distance is calculated */}
+                  {(doctor as any).distance && (doctor as any).distance < 10000 && (
+                    <div className="mb-3 px-2 py-1 bg-emerald-50 text-emerald-700 text-xs rounded-full font-medium flex items-center gap-1">
+                      <MapPin size={10} />
+                      {Math.round((doctor as any).distance)} km away
+                    </div>
+                  )}
+
                   <div className="flex items-center space-x-1 bg-amber-50 px-2 py-1 rounded text-amber-700 text-sm font-semibold mt-auto">
                     <Star size={14} fill="currentColor" />
                     <span>{doctor.rating}</span>

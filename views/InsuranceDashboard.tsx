@@ -368,9 +368,10 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
                                      <h4 className="font-bold text-slate-800">{step.agentName}</h4>
                                      <p className="text-xs text-slate-500 font-medium">{step.role}</p>
                                   </div>
-                                  <span className={`text-xs px-2 py-1 rounded-full capitalize ${
+                                  <span className={`text-xs px-2 py-1 rounded-full capitalize flex items-center gap-1 ${
                                      step.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
                                   }`}>
+                                     {step.status === 'completed' && <CheckCircle2 size={12} />}
                                      {step.status}
                                   </span>
                                </div>
@@ -381,6 +382,16 @@ export const InsuranceDashboard: React.FC<InsuranceDashboardProps> = ({ currentV
                                      </div>
                                   ))}
                                </div>
+                               {step.status === 'failed' && (
+                                  <div className="mt-3 pt-3 border-t border-red-100">
+                                     <button 
+                                        onClick={() => alert("Retrying Agent Step... (Simulation)")}
+                                        className="flex items-center gap-1.5 text-xs font-medium text-red-700 bg-white border border-red-200 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors shadow-sm"
+                                     >
+                                        <RefreshCw size={12} /> Retry Step
+                                     </button>
+                                  </div>
+                               )}
                             </div>
                          </div>
                       ))}

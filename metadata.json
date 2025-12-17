@@ -1,5 +1,7 @@
 {
   "name": "MediSure Connect",
   "description": "A comprehensive enterprise healthcare portal connecting patients, doctors, hospitals, and insurance payers with role-based dashboards and analytics.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "geolocation"
+  ]
 }
